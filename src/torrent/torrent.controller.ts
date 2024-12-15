@@ -1,4 +1,4 @@
-import { Controller, Post, Body, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Body, BadRequestException, InternalServerErrorException, HttpException } from '@nestjs/common';
 import { TorrentService } from './torrent.service.js';
 
 interface DownloadTorrentDto {
@@ -24,14 +24,21 @@ export class TorrentController {
 
   @Post('download')
   async downloadTorrent(@Body() downloadDto: DownloadTorrentDto): Promise<DownloadResponse> {
-    if (!downloadDto.magnetLink || !downloadDto.magnetLink.startsWith('magnet:?')) {
-      throw new BadRequestException('Invalid magnet link format');
-    }
+    try {
+      if (!downloadDto.magnetLink || !downloadDto.magnetLink.startsWith('magnet:?')) {
+        throw new BadRequestException('Invalid magnet link format');
+      }
 
-    if (!downloadDto.username || downloadDto.username.trim().length === 0) {
-      throw new BadRequestException('Username is required');
-    }
+      if (!downloadDto.username || downloadDto.username.trim().length === 0) {
+        throw new BadRequestException('Username is required');
+      }
 
-    return this.torrentService.downloadTorrent(downloadDto.magnetLink, downloadDto.username);
+      return await this.torrentService.downloadTorrent(downloadDto.magnetLink, downloadDto.username);
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Failed to process download request');
+    }
   }
 }
