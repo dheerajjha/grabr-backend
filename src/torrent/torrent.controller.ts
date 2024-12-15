@@ -1,4 +1,4 @@
-import { Controller, Post, Body, BadRequestException, InternalServerErrorException, HttpException } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, BadRequestException, InternalServerErrorException, HttpException } from '@nestjs/common';
 import { TorrentService } from './torrent.service.js';
 
 interface DownloadTorrentDto {
@@ -21,6 +21,19 @@ interface DownloadResponse {
 @Controller('api/torrents')
 export class TorrentController {
   constructor(private readonly torrentService: TorrentService) {}
+
+  @Get(':infoHash/progress')
+  async getProgress(@Param('infoHash') infoHash: string): Promise<{ progress: number }> {
+    try {
+      const progress = await this.torrentService.getProgress(infoHash);
+      return { progress };
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Failed to get download progress');
+    }
+  }
 
   @Post('download')
   async downloadTorrent(@Body() downloadDto: DownloadTorrentDto): Promise<DownloadResponse> {

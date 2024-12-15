@@ -1,7 +1,12 @@
-import { Injectable, Logger, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import type WebTorrent from 'webtorrent';
+
+interface TorrentProgress {
+  progress: number;
+  files: Array<{ name: string; path: string; size: number; }>;
+}
 
 @Injectable()
 export class TorrentService {
@@ -10,11 +15,20 @@ export class TorrentService {
   private readonly downloadPath = path.join(process.cwd(), 'downloads');
   private initialized = false;
   private initializing = false;
+  private activeDownloads = new Map<string, TorrentProgress>();
 
   constructor() {
     this.init().catch(err => {
       this.logger.error('Failed to initialize TorrentService:', err);
     });
+  }
+
+  async getProgress(infoHash: string): Promise<number> {
+    const download = this.activeDownloads.get(infoHash);
+    if (!download) {
+      throw new NotFoundException('Download not found');
+    }
+    return download.progress;
   }
 
   private validateMagnetLink(magnetLink: string): void {
@@ -97,9 +111,24 @@ export class TorrentService {
           clearTimeout(timeout);
           this.logger.log(`Client is downloading: ${torrent.infoHash}`);
 
+          // Initialize progress tracking
+          this.activeDownloads.set(torrent.infoHash, {
+            progress: 0,
+            files: torrent.files.map(file => ({
+              name: file.name,
+              path: path.join(userPath, file.path),
+              size: file.length,
+            }))
+          });
+
           // Track download progress
           torrent.on('download', (bytes) => {
-            this.logger.debug(`Progress: ${(torrent.progress * 100).toFixed(1)}%`);
+            const progress = Math.min(100, torrent.progress * 100);
+            this.logger.debug(`Progress: ${progress.toFixed(1)}%`);
+            const download = this.activeDownloads.get(torrent.infoHash);
+            if (download) {
+              download.progress = progress;
+            }
           });
 
           torrent.on('done', () => {
@@ -109,6 +138,12 @@ export class TorrentService {
                 path: path.join(userPath, file.path),
                 size: file.length,
               }));
+
+              // Update progress to 100%
+              const download = this.activeDownloads.get(torrent.infoHash);
+              if (download) {
+                download.progress = 100;
+              }
 
               resolve({
                 infoHash: torrent.infoHash,
@@ -121,6 +156,10 @@ export class TorrentService {
                 if (err) {
                   this.logger.error('Error removing torrent:', err);
                 }
+                // Remove from active downloads after a delay
+                setTimeout(() => {
+                  this.activeDownloads.delete(torrent.infoHash);
+                }, 5000);
               });
             } catch (error) {
               reject(new InternalServerErrorException('Error processing completed torrent'));
@@ -131,6 +170,7 @@ export class TorrentService {
             clearTimeout(timeout);
             const errorMessage = typeof err === 'string' ? err : err.message;
             this.logger.error(`Torrent error: ${errorMessage}`);
+            this.activeDownloads.delete(torrent.infoHash);
             reject(new BadRequestException(`Torrent error: ${errorMessage}`));
           });
 
