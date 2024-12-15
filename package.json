@@ -1,0 +1,32 @@
+{
+  "name": "grabr-backend",
+  "version": "1.0.0",
+  "description": "A torrent downloading service",
+  "main": "dist/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "ts-node src/main.ts",
+    "watch": "tsc -w"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@nestjs/common": "^10.0.0",
+    "@nestjs/core": "^10.0.0",
+    "@nestjs/platform-express": "^10.0.0",
+    "@azure/storage-blob": "^12.0.0",
+    "webtorrent-hybrid": "^5.0.2",
+    "reflect-metadata": "^0.1.13",
+    "rxjs": "^7.8.1",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "@types/webtorrent": "^0.109.3",
+    "ts-node": "^10.9.1"
+  }
+}
