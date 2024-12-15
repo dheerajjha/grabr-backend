@@ -1,5 +1,5 @@
 import { Controller, Get, Param } from '@nestjs/common';
-import { FileService } from './file.service';
+import { FileService } from './file.service.js';
 
 @Controller('api/files')
 export class FileController {
@@ -9,4 +9,4 @@ export class FileController {
   async listFiles(@Param('username') username: string) {
     return this.fileService.listFiles(username);
   }
-} 
+}

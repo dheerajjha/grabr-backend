@@ -1,23 +1,41 @@
 import { Injectable, Logger } from '@nestjs/common';
-import WebTorrent from 'webtorrent';
 import * as path from 'path';
 import * as fs from 'fs';
 
 @Injectable()
 export class TorrentService {
-  private readonly client: WebTorrent.Instance;
+  private client: any;
   private readonly logger = new Logger(TorrentService.name);
   private readonly downloadPath = path.join(process.cwd(), 'downloads');
+  private initialized = false;
 
   constructor() {
-    this.client = new WebTorrent();
-    // Ensure downloads directory exists
+    this.init();
+  }
+
+  private async init() {
+    await this.initializeClient();
     if (!fs.existsSync(this.downloadPath)) {
       fs.mkdirSync(this.downloadPath, { recursive: true });
+    }
+    this.initialized = true;
+  }
+
+  private async initializeClient() {
+    try {
+      const WebTorrent = (await import('webtorrent')).default;
+      this.client = new WebTorrent();
+    } catch (error) {
+      this.logger.error('Failed to initialize WebTorrent:', error);
+      throw error;
     }
   }
 
   async downloadTorrent(magnetLink: string, username: string): Promise<any> {
+    if (!this.initialized) {
+      await this.init();
+    }
+
     return new Promise((resolve, reject) => {
       const userPath = path.join(this.downloadPath, username);
       
@@ -54,10 +72,10 @@ export class TorrentService {
 
         // Handle errors
         torrent.on('error', (err) => {
-          this.logger.error(`Torrent error: ${err.message}`);
+          this.logger.error(`Torrent error: ${(err as Error).message}`);
           reject(err);
         });
       });
     });
   }
-} 
+}

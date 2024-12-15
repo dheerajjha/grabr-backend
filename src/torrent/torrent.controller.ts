@@ -1,5 +1,5 @@
 import { Controller, Post, Body, BadRequestException } from '@nestjs/common';
-import { TorrentService } from './torrent.service';
+import { TorrentService } from './torrent.service.js';
 
 interface DownloadTorrentDto {
   magnetLink: string;
@@ -34,4 +34,4 @@ export class TorrentController {
 
     return this.torrentService.downloadTorrent(downloadDto.magnetLink, downloadDto.username);
   }
-} 
+}
