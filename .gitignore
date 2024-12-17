@@ -14,10 +14,6 @@ pnpm-lock.yaml
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
-
 # production
 /build
 /dist
@@ -34,18 +30,11 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # local env files
-.env*.local
 .env
+.env.local
 .env.development
 .env.test
 .env.production
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
 
 # IDE and editors
 .idea/
@@ -76,10 +65,8 @@ logs
 # Optional stylelint cache
 .stylelintcache
 
-# dotenv environment variable files
-.env*
-!.env.example
-
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
-/package-lock.json
+
+# Downloads directory
+/downloads
