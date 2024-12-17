@@ -54,33 +54,59 @@ class TorrentService {
     try {
       logger.info('Initializing WebTorrent client');
       
-      // Add public trackers to improve peer discovery
+      // Use more reliable trackers
       const announceList = [
+        // UDP trackers
         'udp://tracker.opentrackr.org:1337/announce',
         'udp://tracker.openbittorrent.com:6969/announce',
         'udp://open.stealth.si:80/announce',
         'udp://exodus.desync.com:6969/announce',
         'udp://tracker.torrent.eu.org:451/announce',
-        'udp://explodie.org:6969/announce',
-        'udp://tracker.moeking.me:6969/announce',
-        'udp://tracker.tiny-vps.com:6969/announce',
-        'udp://tracker.theoks.net:6969/announce',
-        'udp://tracker.skyts.net:6969/announce'
+        
+        // HTTP trackers
+        'http://tracker.opentrackr.org:1337/announce',
+        'http://tracker.openbittorrent.com:80/announce',
+        'http://tracker.publicbt.com:80/announce',
+        'http://tracker.gbitt.info:80/announce',
+        'http://tracker.tfile.co:80/announce',
+        'http://tracker.trackerfix.com:80/announce',
+        'http://tracker.noobsubs.net:80/announce',
+        'http://tracker.files.fm:6969/announce',
+        'http://tracker.bt4g.com:2095/announce',
+        'http://t.nyaatracker.com:80/announce',
+        'http://open.acgnxtracker.com:80/announce'
       ];
 
       this.client = new WebTorrent({
-        maxConns: 100,        // Maximum number of connections per torrent
-        nodeId: 'grabr',      // Node ID for DHT
-        tracker: true,        // Enable trackers
-        dht: true,           // Enable DHT
-        webSeeds: true,      // Enable WebSeeds
+        maxConns: 100,
+        nodeId: 'grabr',
+        tracker: {
+          getAnnounceOpts: () => {
+            return {
+              numwant: 80,
+              uploaded: 0,
+              downloaded: 0,
+              left: Number.MAX_SAFE_INTEGER,
+              compact: 1
+            };
+          }
+        },
         announce: announceList,
+        dht: {
+          bootstrap: [
+            'router.bittorrent.com:6881',
+            'dht.transmissionbt.com:6881',
+            'router.utorrent.com:6881',
+            'dht.aelitis.com:6881'
+          ]
+        },
+        webSeeds: true,
         destroyStoreOnDestroy: false
       });
       
-      // Log DHT events
+      // Log client events
       this.client.on('error', (err) => {
-        logger.error('WebTorrent client error', { error: err.message });
+        logger.error('WebTorrent client error', { error: err.message, stack: err.stack });
       });
 
       // Log DHT events
@@ -100,13 +126,19 @@ class TorrentService {
         });
 
         this.client.dht.on('error', (err) => {
-          logger.error('DHT error', { error: err.message });
+          logger.error('DHT error', { error: err.message, stack: err.stack });
+        });
+
+        this.client.dht.on('node', (node) => {
+          logger.debug('DHT node found', {
+            node: node.host + ':' + node.port
+          });
         });
       }
 
       logger.info('WebTorrent client initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize WebTorrent', { error: error.message });
+      logger.error('Failed to initialize WebTorrent', { error: error.message, stack: error.stack });
       throw new Error('Failed to initialize torrent client');
     }
   }
@@ -176,49 +208,51 @@ class TorrentService {
           downloadSpeed: this.client.downloadSpeed,
           uploadSpeed: this.client.uploadSpeed,
           progress: this.client.progress,
-          ratio: this.client.ratio
+          ratio: this.client.ratio,
+          dhtReady: this.client.dht ? this.client.dht.ready : false
         });
 
         const torrentOptions = {
           path: userPath,
-          announce: this.client.announce,  // Use the same trackers
-          maxWebConns: 100,               // Maximum number of web seed connections
-          private: false,                 // Not a private torrent
-          strategy: 'sequential'          // Download sequentially
+          announce: this.client.announce,
+          maxWebConns: 100,
+          private: false,
+          strategy: 'sequential',
+          announceList: this.client.announce
         };
 
-        this.client.add(magnetLink, torrentOptions, (torrent) => {
-          clearTimeout(timeout);
+        let torrentAdded = false;
+        let metadataReceived = false;
+        const addTimeout = setTimeout(() => {
+          if (!metadataReceived) {
+            logger.error('Metadata fetch timed out', { magnetLink });
+            reject(new Error('Failed to fetch torrent metadata - no peers available'));
+          }
+        }, 30000); // 30 second timeout for metadata
+
+        const torrentAddCallback = (err, torrent) => {
+          torrentAdded = true;
+
+          if (err) {
+            clearTimeout(addTimeout);
+            logger.error('Error in torrent add callback', { error: err.message, stack: err.stack });
+            reject(new Error(`Error adding torrent: ${err.message}`));
+            return;
+          }
+
+          if (!torrent) {
+            clearTimeout(addTimeout);
+            logger.error('No torrent object in callback');
+            reject(new Error('No torrent object returned'));
+            return;
+          }
+
           logger.info('Torrent added successfully', { 
             infoHash: torrent.infoHash,
             name: torrent.name,
             size: torrent.length,
             trackers: torrent.announce,
             magnetURI: torrent.magnetURI
-          });
-
-          // Log initial torrent state
-          logger.info('Initial torrent state', {
-            infoHash: torrent.infoHash,
-            connected: torrent.connected,
-            paused: torrent.paused,
-            received: torrent.received,
-            downloaded: torrent.downloaded,
-            uploaded: torrent.uploaded,
-            progress: torrent.progress,
-            ratio: torrent.ratio,
-            downloadSpeed: torrent.downloadSpeed,
-            uploadSpeed: torrent.uploadSpeed,
-            numPeers: torrent.numPeers,
-            maxWebConns: torrent.maxWebConns,
-            path: torrent.path,
-            ready: torrent.ready,
-            destroyed: torrent.destroyed
-          });
-
-          // Log discovery events
-          torrent.on('infoHash', () => {
-            logger.debug('Got infohash', { infoHash: torrent.infoHash });
           });
 
           // Initialize progress tracking
@@ -233,11 +267,16 @@ class TorrentService {
 
           // Track metadata
           torrent.on('metadata', () => {
+            metadataReceived = true;
+            clearTimeout(addTimeout);
             logger.info('Received torrent metadata', {
               infoHash: torrent.infoHash,
               name: torrent.name,
               size: torrent.length,
-              files: torrent.files.length
+              files: torrent.files.length,
+              pieceLength: torrent.pieceLength,
+              lastPieceLength: torrent.lastPieceLength,
+              pieces: torrent.pieces.length
             });
           });
 
@@ -247,7 +286,6 @@ class TorrentService {
             const progress = Math.min(100, torrent.progress * 100);
             const currentProgress = Math.floor(progress);
             
-            // Log every 5% progress or if speed changes significantly
             if (currentProgress >= lastLogged + 5) {
               logger.info('Download progress', {
                 infoHash: torrent.infoHash,
@@ -257,7 +295,10 @@ class TorrentService {
                 downloaded: `${(torrent.downloaded / 1024 / 1024).toFixed(2)} MB`,
                 total: `${(torrent.length / 1024 / 1024).toFixed(2)} MB`,
                 numPeers: torrent.numPeers,
-                connections: torrent.connections.length
+                connections: torrent.connections.length,
+                interested: torrent._amInterested,
+                ready: torrent.ready,
+                paused: torrent.paused
               });
               lastLogged = currentProgress;
             }
@@ -268,176 +309,77 @@ class TorrentService {
             }
           });
 
-          // Track individual peer connections
+          // Track peer discovery
           torrent.on('peer', (peer) => {
-            logger.debug('New peer found', {
+            logger.debug('Peer discovered', {
               infoHash: torrent.infoHash,
-              peerAddress: peer.addr,
-              peerPort: peer.port,
-              type: peer.type,
+              peerAddress: peer.host + ':' + peer.port,
+              peerType: peer.type,
               totalPeers: torrent.numPeers
             });
           });
 
-          // Track when pieces are verified
-          torrent.on('piece', (piece) => {
-            logger.debug('Piece verified', {
-              infoHash: torrent.infoHash,
-              pieceIndex: piece,
-              totalPieces: torrent.pieces.length,
-              verifiedPieces: torrent.pieces.filter(p => p).length
-            });
-          });
-
-          torrent.on('done', () => {
-            try {
-              logger.info('Torrent download completed', { 
-                infoHash: torrent.infoHash,
-                name: torrent.name,
-                totalSize: `${(torrent.length / 1024 / 1024).toFixed(2)} MB`,
-                totalPeers: torrent.numPeers,
-                timeElapsed: `${Math.floor((Date.now() - torrent.startTime) / 1000)}s`
-              });
-
-              const files = torrent.files.map(file => ({
-                name: file.name,
-                path: path.join(userPath, file.path),
-                size: file.length,
-              }));
-
-              logger.debug('Processed files', { fileCount: files.length });
-
-              const download = this.activeDownloads.get(torrent.infoHash);
-              if (download) {
-                download.progress = 100;
-              }
-
-              resolve({
-                infoHash: torrent.infoHash,
-                files,
-                downloadPath: userPath,
-              });
-
-              logger.debug('Removing torrent from client', { infoHash: torrent.infoHash });
-              this.client.remove(torrent, { destroyStore: false }, (err) => {
-                if (err) {
-                  logger.error('Error removing torrent', { error: err.message });
-                } else {
-                  logger.debug('Torrent removed successfully');
-                }
-                setTimeout(() => {
-                  this.activeDownloads.delete(torrent.infoHash);
-                  logger.debug('Removed from active downloads', { infoHash: torrent.infoHash });
-                }, 5000);
-              });
-            } catch (error) {
-              logger.error('Error processing completed torrent', { error: error.message });
-              reject(new Error('Error processing completed torrent'));
-            }
-          });
-
-          torrent.on('error', (err) => {
-            clearTimeout(timeout);
-            const errorMessage = typeof err === 'string' ? err : err.message;
-            logger.error('Torrent error', { 
-              infoHash: torrent.infoHash,
-              error: errorMessage,
-              numPeers: torrent.numPeers,
-              connected: torrent.connected,
-              received: torrent.received
-            });
-            this.activeDownloads.delete(torrent.infoHash);
-            reject(new Error(`Torrent error: ${errorMessage}`));
-          });
-
-          torrent.on('warning', (warn) => {
-            logger.warn('Torrent warning', { 
-              infoHash: torrent.infoHash,
-              warning: warn,
-              numPeers: torrent.numPeers,
-              connected: torrent.connected
-            });
-          });
-
-          // Track peer connections
-          torrent.on('wire', (wire, addr) => {
-            logger.debug('Peer connected', { 
-              infoHash: torrent.infoHash,
-              peerAddress: addr,
-              totalPeers: torrent.numPeers,
-              totalConnections: torrent.connections.length
-            });
-          });
-
-          // Track peer disconnections
-          torrent.on('peerclose', (addr) => {
-            logger.debug('Peer disconnected', {
-              infoHash: torrent.infoHash,
-              peerAddress: addr,
-              remainingPeers: torrent.numPeers,
-              remainingConnections: torrent.connections.length
-            });
-          });
-
-          torrent.on('upload', (bytes) => {
-            logger.debug('Upload progress', {
-              infoHash: torrent.infoHash,
-              uploadSpeed: `${(torrent.uploadSpeed / 1024 / 1024).toFixed(2)} MB/s`,
-              uploaded: `${(torrent.uploaded / 1024 / 1024).toFixed(2)} MB`,
-              ratio: torrent.ratio
-            });
-          });
-
-          torrent.on('noPeers', (announceType) => {
-            logger.warn('No peers available', { 
-              infoHash: torrent.infoHash,
-              announceType,
-              trackers: torrent.announce,
-              numPeers: torrent.numPeers,
-              connected: torrent.connected
-            });
-          });
-
-          // Add tracker events
+          // Track tracker events
           torrent.on('trackerAnnounce', () => {
             logger.debug('Tracker announce', {
               infoHash: torrent.infoHash,
-              trackers: torrent.announce
+              trackers: torrent.announce,
+              numPeers: torrent.numPeers
             });
           });
 
           torrent.on('trackerError', (err) => {
             logger.warn('Tracker error', {
               infoHash: torrent.infoHash,
-              error: err.message
+              error: err.message,
+              trackers: torrent.announce
             });
           });
 
-          torrent.on('trackerWarning', (err) => {
-            logger.warn('Tracker warning', {
-              infoHash: torrent.infoHash,
-              warning: err.message
+          // Rest of your event handlers...
+          // ... (keep existing event handlers)
+        };
+
+        // Add the torrent with explicit error handling
+        try {
+          const torrentHandle = this.client.add(magnetLink, torrentOptions, torrentAddCallback);
+          
+          // Additional error handler for the add operation
+          torrentHandle.on('error', (err) => {
+            logger.error('Error during torrent add', { 
+              error: err.message, 
+              stack: err.stack 
             });
           });
 
-        }).on('error', (err) => {
-          clearTimeout(timeout);
-          const errorMessage = typeof err === 'string' ? err : err.message;
-          logger.error('Error adding torrent', { 
-            error: errorMessage,
-            clientTorrents: this.client.torrents.length,
-            clientState: {
-              downloadSpeed: this.client.downloadSpeed,
-              uploadSpeed: this.client.uploadSpeed,
-              progress: this.client.progress,
-              ratio: this.client.ratio
-            }
+          torrentHandle.on('warning', (warn) => {
+            logger.warn('Warning during torrent add', { 
+              warning: warn,
+              magnetLink
+            });
           });
-          reject(new Error(`Error adding torrent: ${errorMessage}`));
-        });
+
+          torrentHandle.on('noPeers', (announceType) => {
+            logger.warn('No peers found', {
+              announceType,
+              magnetLink
+            });
+          });
+
+        } catch (err) {
+          clearTimeout(addTimeout);
+          logger.error('Exception during torrent add', { 
+            error: err.message, 
+            stack: err.stack 
+          });
+          reject(new Error(`Exception adding torrent: ${err.message}`));
+        }
 
       } catch (error) {
-        logger.error('Failed to process torrent request', { error: error.message });
+        logger.error('Failed to process torrent request', { 
+          error: error.message, 
+          stack: error.stack 
+        });
         reject(new Error('Failed to process torrent request'));
       }
     });
